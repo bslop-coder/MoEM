@@ -1,0 +1,96 @@
+name: Build iOS Unsigned IPA
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Inspect Xcode & SDK environment
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks
+
+      - name: Install build tools (xcodegen, cmake)
+        run: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          brew list cmake >/dev/null 2>&1 || brew install cmake
+
+      - name: Cache llama.xcframework (v1.0.0 ios-arm64)
+        id: cache-llama
+        uses: actions/cache@v4
+        with:
+          path: Vendor/llama.xcframework
+          key: llama-xcframework-v1.0.0-ios17-arm64-${{ hashFiles('Patches/**') }}
+
+      - name: Build llama.cpp v1.0.0 XCFramework (ios-device + Metal)
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        run: |
+          rm -rf /tmp/llama-src
+          git clone --depth 1 --branch v1.0.0 https://github.com/ggml-org/llama.cpp.git /tmp/llama-src
+          cd /tmp/llama-src
+
+          if [ -d "${{ github.workspace }}/Patches" ]; then
+            for p in "${{ github.workspace }}"/Patches/*.patch; do
+              [ -e "$p" ] || continue
+              echo "Applying patch: $p"
+              git apply "$p"
+            done
+          fi
+
+          IOS_MIN_OS_VERSION=17.0 ./build-xcframework.sh ios-device
+
+          mkdir -p "${{ github.workspace }}/Vendor"
+          rm -rf "${{ github.workspace }}/Vendor/llama.xcframework"
+          cp -R /tmp/llama-src/build-apple/llama.xcframework "${{ github.workspace }}/Vendor/"
+
+          echo "Built XCFramework structure:"
+          find "${{ github.workspace }}/Vendor/llama.xcframework" -maxdepth 4
+
+      - name: Generate Xcode project with XcodeGen
+        run: |
+          xcodegen generate
+          ls -la
+
+      - name: Archive unsigned Release build (iphoneos arm64)
+        run: |
+          rm -rf build
+          xcodebuild archive \
+            -project GemmaEdge.xcodeproj \
+            -scheme GemmaEdge \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            -archivePath build/GemmaEdge.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH="build/GemmaEdge.xcarchive/Products/Applications/GemmaEdge.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Error: $APP_PATH not found!"
+            find build/GemmaEdge.xcarchive -maxdepth 4
+            exit 1
+          fi
+          mkdir -p build/ipa_root/Payload
+          cp -R "$APP_PATH" build/ipa_root/Payload/
+          cd build/ipa_root
+          zip -r -y "${{ github.workspace }}/GemmaEdge-unsigned.ipa" Payload
+          ls -lh "${{ github.workspace }}/GemmaEdge-unsigned.ipa"
+
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GemmaEdge-unsigned-ipa
+          path: GemmaEdge-unsigned.ipa
+          retention-days: 14
