@@ -54,15 +54,17 @@ jobs:
           rm -rf "${{ github.workspace }}/Vendor/llama.xcframework"
           cp -R /tmp/llama-src/build-apple/llama.xcframework "${{ github.workspace }}/Vendor/"
 
-          echo "Built XCFramework structure:"
-          find "${{ github.workspace }}/Vendor/llama.xcframework" -maxdepth 4
-
       - name: Save llama.xcframework cache immediately
         if: steps.cache-llama.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: Vendor/llama.xcframework
           key: llama-xcframework-v1.0.0-ios17-arm64-${{ hashFiles('Patches/**') }}
+
+      - name: Verify XCFramework contents and size
+        run: |
+          du -sh Vendor/llama.xcframework
+          find Vendor/llama.xcframework -maxdepth 4
 
       - name: Generate Xcode project with XcodeGen
         run: |
@@ -83,7 +85,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
-      - name: Package unsigned IPA
+      - name: Verify embedded framework & package unsigned IPA
         run: |
           APP_PATH="build/GemmaEdge.xcarchive/Products/Applications/GemmaEdge.app"
           if [ ! -d "$APP_PATH" ]; then
@@ -91,6 +93,17 @@ jobs:
             find build/GemmaEdge.xcarchive -maxdepth 4
             exit 1
           fi
+
+          echo "=== App Bundle Contents ==="
+          find "$APP_PATH" -maxdepth 4
+          echo "=== Linked Dylibs ==="
+          otool -L "$APP_PATH/GemmaEdge"
+
+          if [ ! -f "$APP_PATH/Frameworks/llama.framework/llama" ]; then
+            echo "ERROR: llama.framework binary is missing from $APP_PATH/Frameworks/!"
+            exit 1
+          fi
+
           mkdir -p build/ipa_root/Payload
           cp -R "$APP_PATH" build/ipa_root/Payload/
           cd build/ipa_root
