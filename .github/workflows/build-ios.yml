@@ -14,6 +14,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify repository file layout
+        run: |
+          find . -maxdepth 4 -not -path './.git*' | sort
+
       - name: Inspect Xcode & SDK environment
         run: |
           xcodebuild -version
@@ -24,9 +28,9 @@ jobs:
           brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
           brew list cmake >/dev/null 2>&1 || brew install cmake
 
-      - name: Cache llama.xcframework (v1.0.0 ios-arm64)
+      - name: Restore cached llama.xcframework (v1.0.0 ios-arm64)
         id: cache-llama
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: Vendor/llama.xcframework
           key: llama-xcframework-v1.0.0-ios17-arm64-${{ hashFiles('Patches/**') }}
@@ -54,6 +58,13 @@ jobs:
 
           echo "Built XCFramework structure:"
           find "${{ github.workspace }}/Vendor/llama.xcframework" -maxdepth 4
+
+      - name: Save llama.xcframework cache immediately
+        if: steps.cache-llama.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: Vendor/llama.xcframework
+          key: llama-xcframework-v1.0.0-ios17-arm64-${{ hashFiles('Patches/**') }}
 
       - name: Generate Xcode project with XcodeGen
         run: |
